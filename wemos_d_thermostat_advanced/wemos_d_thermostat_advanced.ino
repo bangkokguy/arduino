@@ -1,47 +1,23 @@
-#include "include/timer.h"
-#include "include/param.h"
-#include "include/datum.h"
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
-#include <ArduinoJson.h>
 #include <ESP8266WebServer.h>
 #include <ESP8266WiFi.h>
-
 #include <PubSubClient.h>
 #include <SPI.h>
-
 #include <Wire.h>
 #include <string>
+#include "param.h"
+#include "datum.h"
+#include "timer.h"
 
 /*---------------------------*/
+#define DEBUG if (1==2)
 /*---------------------------*/
 #define SELF "thermostat1"
 #define VERSION "wemos_d_thermostat_advanced.ino"
 /*---------------------------*/
 /*---------------------------*/
 
-/**
- * Default values
- * --------------
- */
-/*#define CSSID "MrWhite"
-#define WIFIPASSWORD "Feketebikapata1965!"
-#define DAYTEMP 25.0
-#define NIGHTTEMP 18.0
-#define DAYSTART 0700
-#define NIGHTSTART 2300
-#define NOTEMPDATATIMEOUT 400000
-#define SWITCHTHRESHOLD 0.20
-#define AUTORESET true
-#define NOAUTORESET false
-#define NOTEMPDATA 10
-#define MANUALTOGGLETIMEOUT 900000
-#define TIMER_1TIMEOUT 15000*/
-
-/**
- * Other constants
- * ---------------
- */
 #define d0 16
 #define d1 5
 #define d2 4
@@ -69,44 +45,40 @@
 #define mqttPassword ""
 #define MQTTKEEPALIVE 3600
 
-/**
- * Working variables
- * -----------------
- */
-
-
 struct tTempIn {
     int idx;
     int nvalue;
     float svalue;
     DeserializationError error;
 };
+struct tSetTemp {
+    //curl -X PUT -d 
+    //'{"daytemp":"24.00","nighttemp":"18.00","thereshold":"0.20"}' 
+    // 192.168.1.141:8080/rest/v1/temp
+    float daytemp;
+    float nighttemp;
+    float thereshold;
+    DeserializationError error;
+};
+struct tSetTime {
+    //curl -X PUT -d 
+    //'{"daystart":"06:00","nightstart":"22:00"}' 
+    // 192.168.1.141:8080/rest/v1/time
+    const char * daystart;
+    const char * nightstart;
+    DeserializationError error;
+};
 
-/*struct tParam {
-        String sSSID;
-        String sWiFiPassword;
-        String sDayStart;
-        String sNightStart;
-        String sDayTemp;
-        String sNightTemp;
-        String sSwithThreshold;
-        DeserializationError error;
-    } */
 Datum::t_date lastDate;
 Datum datum;
 bool bDay;
 float fCurrentTemp = 23.45;
 int iManualToggleState = 2;
-// int                     iManualToggleTimeOut = 40;
-// int                     iNoTempDataTimeOut = 4000;
 int iPhysicalSwitchState = 0;
 int iPrevSwitchState;
 int iRelayState = 0;
 String sIP;
 char daysOfTheWeek[7][12] = DAYSOFTHEWEEK;
-DynamicJsonDocument doc(1024);
-
-
 
 ESP8266WebServer WEBServer(8080);
 WiFiClient espClient;
@@ -123,10 +95,6 @@ Timer t120(200, AUTORESET);
 Param p_param;
 Param::tParam _param;
 
-/**
- * handlePhysicalSwitch
- * ------------------
- */
 void handlePhysicalSwitch() {
     iPhysicalSwitchState = digitalRead(switchPin);
     if (iPhysicalSwitchState != iPrevSwitchState) {
@@ -137,21 +105,17 @@ void handlePhysicalSwitch() {
     }
     iPrevSwitchState = iPhysicalSwitchState;
 }
-
-/**
- * statusDisplay
- */
 void statusDisplay() {
+    return;
     Serial.println("statusDisplay");
-    timeClient.update();
+    datum.update();
     t1.setTextSize(1);
     t1.clearDisplay();
     t1.setCursor(36, 20);
-    t1.println(timeClient.getFormattedTime());
+    t1.println(datum.getFormattedTime());
     t1.setTextSize(2);
     t1.setCursor(36, 34);
     t1.println(String(fCurrentTemp));
-
     t1.setTextSize(1);
     t1.setCursor(36, 54);
 
@@ -177,7 +141,7 @@ void statusDisplay() {
 
     String m = "";
     Serial.println("****************************");
-    m = "* " + timeClient.getFormattedTime();
+    m = "* " + datum.getFormattedTime();
     Serial.println(m);
     m = "* " + String(lastDate.year) + "-" + String(lastDate.month) + "-" + String(lastDate.day) + " " +
         String(lastDate.hour) + ":" + String(lastDate.minute) + ":" + String(lastDate.second);
@@ -204,8 +168,8 @@ void statusDisplay() {
         Serial.println("* Physical sw OFF");
     Serial.println("****************************");
 }
-
-/**
+void alarm(int pattern) {
+    /**
  * Alarm
  * -----
  * pattern
@@ -216,7 +180,6 @@ void statusDisplay() {
  * 5: mqtt init error
  * 10: no data time out
  */
-void alarm(int pattern) {
     Serial.println("alarm");
     digitalWrite(ledPin, HIGH);
     delay(50);
@@ -244,13 +207,12 @@ void alarm(int pattern) {
     digitalWrite(ledPin, LOW);
     delay(50);
 }
-
-/**
+tTempIn parseTemp(char json[]) {
+    /**
  * parseJson - parse incoming MQTT json message
- * http://192.168.1.249:8080/temp?temp={idx : 1, nvalue : 0, svalue : 25.0}
+ * curl -X PUT -d 'temp={idx : 1, nvalue : 0, svalue : 19.0}' 192.168.1.141:8080/temp
  * --------------------------------------------
  */
-tTempIn parseTemp(char json[]) {
     Serial.println("parseTemp");
 
     StaticJsonDocument<1024> doc;
@@ -271,7 +233,56 @@ tTempIn parseTemp(char json[]) {
     tin.svalue = doc["svalue"];
     return tin;
 }
+tSetTemp parseSetTemp(char json[]) {
+    /**
+ * parseJson - parse incoming REST message
+ * curl -X PUT -d '{idx : 1, nvalue : 0, svalue : 20.0}' 192.168.1.141:8080/rest/v1/temp
+ * --------------------------------------------
+ */
+    Serial.println("parseSetTemp");
 
+    StaticJsonDocument<1024> doc;
+    tSetTemp tin;
+
+    tin.error = deserializeJson(doc, json);
+
+    if (tin.error) {
+        Serial.print("deserializeJson() failed ");
+        Serial.println(tin.error.f_str());
+        return tin;
+    } else
+        Serial.print("deserializeJson() OK ");
+
+    Serial.println();
+    tin.daytemp = doc["daytemp"];
+    tin.nighttemp = doc["nighttemp"];
+    tin.thereshold = doc["thereshold"];
+    return tin;
+}
+tSetTime parseSetTime(char json[]) {
+    //curl -X PUT -d 
+    //'{"daystart":"06:00","nightstart":"22:00"}' 
+    // 192.168.1.141:8080/rest/v1/time
+
+    Serial.println("parseSetTime");
+
+    StaticJsonDocument<1024> doc;
+    tSetTime tin;
+
+    tin.error = deserializeJson(doc, json);
+
+    if (tin.error) {
+        Serial.print("deserializeJson() failed ");
+        Serial.println(tin.error.f_str());
+        return tin;
+    } else
+        Serial.print("deserializeJson() OK ");
+
+    Serial.println();
+    tin.daystart = doc["daystart"];
+    tin.nightstart = doc["nightstart"];
+    return tin;
+}
 void initDisplay() {
     Serial.println("initDisplay");
     Wire.begin();
@@ -293,7 +304,6 @@ void initDisplay() {
     t1.clearDisplay();
     Serial.println("display init done");
 }
-
 void connectWiFi() {
     Serial.print("Connecting to ");
     Serial.print(_param.sSSID);
@@ -319,36 +329,201 @@ void connectWiFi() {
     sIP = WiFi.localIP().toString();
     WiFi.printDiag(Serial);
 }
-
-void handleTemp();
-void handleNotFound();
-
-/**
- * Init WEB Server
- * ---------------
- */
 void initWebServer() {
     Serial.println("initWEBServer");
     WEBServer.on("/", handleRoot);
     WEBServer.on("/admin", handleRoot);
     WEBServer.on("/admin/", handleRoot);
-    //  WEBServer.on("/setup/", handleSetup);
+    WEBServer.on("/temp", handleTemp);
+    WEBServer.on("/rest/v1/pressure", queryPressure);
+    WEBServer.on("/rest/v1/temp", queryTemp);
+    WEBServer.on("/rest/v1/device", queryDevice);
+    WEBServer.on("/rest/v1/time", queryTime);
     WEBServer.on("/temp", handleTemp);
     WEBServer.onNotFound(handleNotFound);
     WEBServer.begin();
     Serial.println("HTTP server started");
 }
+void queryDevice() {
+    Serial.println("queryDevice");
+    String ptr = "";
+    ptr += "{\"ip\":\"@ip\",\"ssid\":\"@ssid\",\"passphrase\":\"@passphrase\",\"currenttime\":\"@timeCurr\"}";
+    datum.update();
+    ptr.replace("@ip", sIP);
+    ptr.replace("@ssid", _param.sSSID);
+    ptr.replace("@timeCurr", datum.getFormattedTime());
+    ptr.replace("@passphrase", _param.sWiFiPassword);
+    ptr.replace("@mqttStatus", MQTTClient.connected() ? "connected" : "not connected");
+    ptr.replace("@physicalSwitchState", (iPhysicalSwitchState == 1) ? "ON" : "OFF");
+    ptr.replace("@relayState", (iRelayState == 1) ? "ON" : "OFF");
+    ptr.replace("@millis", String(millis()));
+    ptr.replace("@dayName", daysOfTheWeek[datum.getDay()]);
+    switch (iManualToggleState) {
+    case 1: {
+        ptr.replace("@manualToggleState", "on");
+        ptr.replace("@on", "checked=''");
+        break;
+    }
+    case 0: {
+        ptr.replace("@manualToggleState", "off");
+        ptr.replace("@off", "checked=''");
+        break;
+    }
+    case 2: {
+        ptr.replace("@manualToggleState", "auto");
+        ptr.replace("@auto", "checked=''");
+        break;
+    }
+    default:
+        Serial.println("default");
+        ;
+    }
+    ptr.replace("@manualToggleTimeOut", String(timer_manualToggle.get()));
+    ptr.replace("@noTempDataTimeOut", (timer_noData.timeout()) ? "yes" : "no");
+    ptr.replace("@switchThreshold", _param.sSwithThreshold);
+    Serial.println(ptr);
+    WEBServer.send(200, "text/json", ptr);
+}
+void queryTemp() {
+    //curl 192.168.1.141:8080/rest/v1/temp
+    if (WEBServer.method() == HTTP_GET) {
+    Serial.println("queryTemp");
+    //{"currenttemp":"24.00","nighttemp":"18.00","daytemp":"24.00","thereshold":"0.20"}
+    String ptr = "";
+    ptr += "{\"currenttemp\":\"@tempCurr\",\"nighttemp\":\"@nightTemp\",\"daytemp\":\"@dayTemp\",\"thereshold\":\"@switchThreshold\"}";
+    datum.update();
+    ptr.replace("@dayTemp", _param.sDayTemp);
+    ptr.replace("@nightTemp", _param.sNightTemp);
+    ptr.replace("@startDay", _param.sDayStart);
+    ptr.replace("@nightStart", _param.sNightStart);
 
-/**
- * mqttCallback
- * ------------
- */
-void callback(char *topic, byte *payload, unsigned int length) { Serial.println("MQTTCallBack"); }
+    ptr.replace("@switchThreshold", _param.sSwithThreshold);
+    ptr.replace("@tempCurr", String(fCurrentTemp));
+    Serial.println(ptr);
+    WEBServer.send(200, "text/json", ptr);
+    } else {
+        setTemp();
+    }
+}
+void queryTime() {
+    //curl 192.168.1.141:8080/rest/v1/time
+    if (WEBServer.method() == HTTP_GET) {
+    Serial.println("queryTime");
+    //{"nightstart":"18:00","daystart":"24:00"}
+    String ptr = "";
+    ptr += "{\"nightstart\":\"@nightStart\",\"daystart\":\"@dayStart\"}";
+    datum.update();
+    ptr.replace("@dayStart", _param.sDayStart);
+    ptr.replace("@nightStart", _param.sNightStart);
+    Serial.println(ptr);
+    WEBServer.send(200, "text/json", ptr);
+    } else {
+        setTime();
+    }
+}
+void setTemp () {
+    //curl -X PUT -d '{idx : 1, nvalue : 0, svalue : 20.0}' 192.168.1.141:8080/rest/v1/temp
+    Serial.println("setTemp");
 
-/**
- * MQTT init
- * ---------
- */
+    char json[1024];
+    Serial.print("Temp arrived ");
+
+    Serial.print("Message:");
+    /*for (int i = 0; i < length; i++) {
+      Serial.print((char)payload[i]);
+      json[i] = (char)payload [i];
+    }*/
+    Serial.println(WEBServer.args());
+
+    for (int i = 0; i <= WEBServer.args(); i++) {
+        Serial.print(i);
+        Serial.println(WEBServer.arg(i));
+        Serial.println(WEBServer.header(i));
+    }
+    Serial.println();
+
+    String s = WEBServer.arg(1);
+    int n = s.length();
+    strcpy(json, s.c_str());
+
+    //tTempIn tinn = parseSetTemp(json);
+    tSetTemp setTemp = parseSetTemp(json);
+
+    if (setTemp.error)
+        Serial.println("Couldn't parse message");
+    else {
+        Serial.println("Temp changed");
+        Serial.println(setTemp.daytemp);
+        Serial.println(setTemp.nighttemp);
+        Serial.println(setTemp.thereshold);
+        _param.sDayTemp = String(setTemp.daytemp);
+        _param.sNightTemp = String(setTemp.nighttemp);
+        _param.sSwithThreshold = String(setTemp.thereshold);
+        p_param.saveParam(_param);
+        timer_manualToggle.reset();
+        timer_1.flush();
+    }
+    WEBServer.send(200, "text/plain", "Temp OK");
+}
+void setTime () {
+    //curl -X PUT -d '{idx : 1, nvalue : 0, svalue : 20.0}' 192.168.1.141:8080/rest/v1/temp
+    Serial.println("setTemp");
+
+    char json[1024];
+    Serial.print("Temp arrived ");
+
+    Serial.print("Message:");
+    /*for (int i = 0; i < length; i++) {
+      Serial.print((char)payload[i]);
+      json[i] = (char)payload [i];
+    }*/
+    Serial.println(WEBServer.args());
+
+    for (int i = 0; i <= WEBServer.args(); i++) {
+        Serial.print(i);
+        Serial.println(WEBServer.arg(i));
+        Serial.println(WEBServer.header(i));
+    }
+    Serial.println();
+
+    String s = WEBServer.arg(1);
+    int n = s.length();
+    strcpy(json, s.c_str());
+
+    //tTempIn tinn = parseSetTemp(json);
+    tSetTime setTime = parseSetTime(json);
+
+    if (setTime.error)
+        Serial.println("Couldn't parse message");
+    else {
+        Serial.println("Time changed");
+        Serial.println(setTime.daystart);
+        Serial.println(setTime.nightstart);
+        _param.sDayStart = setTime.daystart;
+        _param.sNightStart = setTime.nightstart;
+        p_param.saveParam(_param);
+        timer_manualToggle.reset();
+        timer_1.flush();
+    }
+    WEBServer.send(200, "text/plain", "Temp OK");
+}
+void queryPressure() {
+    Serial.println("queryPressure");
+    //{"currenttemp":"24.00","nighttemp":"18.00","daytemp":"24.00","thereshold":"0.20"}
+    String ptr = "";
+    ptr += "{\"pressure\":\"@pressureCurr\"}";
+    datum.update();
+    ptr.replace("@pressureCurr", "* * * no data available * * *");
+    Serial.println(ptr);
+    WEBServer.send(200, "text/json", ptr);
+}
+void callback(char *topic, byte *payload, unsigned int length) { 
+    Serial.println("MQTTCallBack"); 
+    /**
+     * mqttCallback
+     * ------------
+     */
+    }
 void initMQTT() {
     Serial.println("initMQTT");
     MQTTClient.setServer(mqttServer, mqttPort);
@@ -376,22 +551,19 @@ void initMQTT() {
         Serial.println("MQTT connection established");
     }
 }
-
-/**
- * handleRoot ()
- * -------------
- * if get -> return html
- * if post -> process arguments and reply with 303
- */
 void handleRoot() {
-    Serial.println("handleRoot" + WEBServer.uri());
-    timeClient.update();
+    /**
+     * handleRoot ()
+     * -------------
+     * if get -> return html
+     * if post -> process arguments and reply with 303
+     */
+        Serial.println("handleRoot" + WEBServer.uri());
+    datum.update();
 
     Serial.print(WEBServer.hostHeader());
 
     if (WEBServer.args()) {
-        // Serial.println("handle root submit");
-        //    handleRootSubmit();
         if (WEBServer.arg("auto") == "on") {
             iManualToggleState = 1;
         } else if (WEBServer.arg("auto") == "off") {
@@ -400,36 +572,22 @@ void handleRoot() {
             iManualToggleState = 2;
         }
 
-        /*tParam backup = _param;*/
         _param.sDayTemp = WEBServer.arg("dayTemp");
         _param.sNightTemp = WEBServer.arg("nightTemp");
         _param.sDayStart = WEBServer.arg("startDay");
         _param.sNightStart = WEBServer.arg("nightStart");
         _param.sSwithThreshold = WEBServer.arg("switchThreshold");
-        /*if (backup.sDayTemp != _param.sDayTemp ||
-          backup.sDayTemp != _param.sDayTemp ||
-          backup.sDayTemp != _param.sDayTemp ||
-          backup.sDayTemp != _param.sDayTemp ||
-          backup.sDayTemp != _param.sDayTemp ||
-          backup.sDayTemp != _param.sDayTemp) {
-          Serial.println("parameters have changed");*/
         p_param.saveParam(_param);
         timer_manualToggle.reset();
         timer_1.flush();
-        /*}*/
 
         WEBServer.sendHeader("Location", "/");
         WEBServer.send /*Header*/ (303, "text/html", "");
-        //"HTTP/1.1 400 Bad Request"
-        //"Connection: Closed"
-        //"Location: \r\n");
     } else {
-        // Redisplay the form
         Serial.println("redisplay root");
         WEBServer.send(200, "text/html", rootHTML());
     }
 }
-
 void handleTemp() {
     Serial.println("handleTemp");
 
@@ -475,13 +633,11 @@ void handleTemp() {
     }
     WEBServer.send(200, "text/plain", "Temp OK");
 }
-
 void handleNotFound() {
     Serial.print("handleNotFound ");
     Serial.println(WEBServer.uri());
     WEBServer.send(404, "text/plain", "Not found");
 }
-
 void setup() {
     pinMode(LED_BUILTIN, OUTPUT);
     pinMode(ledPin, OUTPUT);
@@ -498,7 +654,10 @@ void setup() {
     digitalWrite(ledPin, LOW);
 
     initDisplay();
-    p_param.getParam(_param);
+    _param = p_param.getParam(_param);
+    Serial.println(_param.sSSID);
+    Serial.println(_param.sWiFiPassword);
+    Serial.println(_param.sDayStart);
     Serial.println("***" + _param.sSSID + "***");
     connectWiFi();
     lastDate = datum.initTimeServer(lastDate);
@@ -506,7 +665,6 @@ void setup() {
     iPrevSwitchState = digitalRead(switchPin);
     initMQTT();
 }
-
 void loop() {
     // check for web input
     WEBServer.handleClient();
@@ -523,11 +681,11 @@ void loop() {
         if (iManualToggleState == 2) {
             lastDate = datum.updateTimeServer(lastDate);
             float fTime, fDayStart, fNightStart;
-            fTime = (float)(timeClient.getHours() * 100 + timeClient.getMinutes()) / 100;
+            fTime = (float)(datum.getHours() * 100 + datum.getMinutes()) / 100;
             fDayStart = (float)(datum.getHour(_param.sDayStart, ':') * 100 + datum.getMinute(_param.sDayStart, ':')) / 100;
             fNightStart = (float)(datum.getHour(_param.sNightStart, ':') * 100 + datum.getMinute(_param.sNightStart, ':')) / 100;
-            Serial.println(fTime);
-            Serial.println(fDayStart);
+            DEBUG Serial.println(fTime);
+            DEBUG Serial.println(fDayStart);
             bDay = (fTime >= fDayStart && fTime < fNightStart);
             if (bDay)
                 if (fCurrentTemp > _param.sDayTemp.toFloat())
@@ -588,12 +746,6 @@ void loop() {
     // show current state on display
     // refresh delay parameters
 }
-
-/**
- * rootHTML
- * --------
- * prepare the hrml string for the root path
- */
 String rootHTML() {
     Serial.println("rootHTML");
     String ptr = "";
@@ -660,7 +812,7 @@ String rootHTML() {
     ptr += "tchThreshold</td></tr></td><td>manual toggle state</td><td><mark>@manua";
     ptr += "lToggleState</mark></td></tr></table></div> </body></html>";
 
-    timeClient.update();
+    datum.update();
     ptr.replace("@dayTemp", _param.sDayTemp);
     ptr.replace("@nightTemp", _param.sNightTemp);
     ptr.replace("@startDay", _param.sDayStart);
@@ -671,7 +823,7 @@ String rootHTML() {
     ptr.replace("@mqttStatus", MQTTClient.connected() ? "connected" : "not connected");
     ptr.replace("@ip", sIP);
     ptr.replace("@millis", String(millis()));
-    ptr.replace("@dayName", daysOfTheWeek[timeClient.getDay()]);
+    ptr.replace("@dayName", daysOfTheWeek[datum.getDay()]);
 
     ptr.replace("@physicalSwitchState", (iPhysicalSwitchState == 1) ? "ON" : "OFF");
     ptr.replace("@relayState", (iRelayState == 1) ? "ON" : "OFF");
@@ -702,7 +854,7 @@ String rootHTML() {
     ptr.replace("@nightStart", _param.sNightStart);
     ptr.replace("@noTempDataTimeOut", (timer_noData.timeout()) ? "yes" : "no");
     ptr.replace("@SSID", _param.sSSID);
-    ptr.replace("@timeCurr", timeClient.getFormattedTime());
+    ptr.replace("@timeCurr", datum.getFormattedTime());
     ptr.replace("@switchThreshold", _param.sSwithThreshold);
 
     return ptr;

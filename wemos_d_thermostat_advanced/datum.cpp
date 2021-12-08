@@ -1,32 +1,9 @@
-#include <ESP8266WiFi.h>
-#include <EEPROM.h>
-#include <ArduinoJson.h>
 #include <NTPClient.h>
 #include <WiFiUdp.h>
+#include <string>
+#include "datum.h"
 #define utcOffsetInSeconds 3600
 #define dstOffsetInSeconds 3600
-
-#define DIGEST "19650604"
-
-class Datum {
-  private:    
-  public:
-  struct t_date {
-    int year;
-    int month;
-    int day;
-    int hour;
-    int minute;
-    int second;
-    };  
-    Datum();
-    Datum::t_date getDate(double);
-    int getHour(String, char);
-    int getMinute(String, char);
-    void getDatum();
-    Datum::t_date initTimeServer(Datum::t_date);
-    Datum::t_date updateTimeServer(Datum::t_date);
-};
 
 Datum::Datum() {
 };
@@ -34,7 +11,25 @@ Datum::Datum() {
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP, "pool.ntp.org", utcOffsetInSeconds);
 
-int getHour(String s, char delimiter) {
+void Datum::update() {
+    timeClient.update();
+    }
+
+String Datum::getFormattedTime() {
+    return timeClient.getFormattedTime();
+}
+int Datum::getHours() {
+    return timeClient.getHours();
+}
+int Datum::getMinutes() {
+    return timeClient.getMinutes();
+}
+
+int Datum::getDay() {
+    return timeClient.getDay();
+}
+
+int Datum::getHour(String s, char delimiter) {
     int i = s.length();
     while (i >= 0 && s[i] != delimiter) {
         s[i] = ' ';
@@ -45,7 +40,7 @@ int getHour(String s, char delimiter) {
     return s.toInt();
 }
 
-int getMinute(String s, char delimiter) {
+int Datum::getMinute(String s, char delimiter) {
     int i = 0;
     while (i <= s.length() && s[i] != delimiter) {
         s[i] = ' ';
@@ -61,15 +56,8 @@ int getMinute(String s, char delimiter) {
  * -------
  * calculate date and time from epoche time
  */
-struct t_date {
-    int year;
-    int month;
-    int day;
-    int hour;
-    int minute;
-    int second;
-};
-Datum::t_date getDate(double dSeconds) {
+
+Datum::t_date Datum::getDate(double dSeconds) {
     // double dSeconds = timeClient.getEpochTime(); //time(NULL);
     long int liElapsedHours, liElapsedDays, liElapsedYears, liElapsedLeapYears, liRemainingDays, liCurrentYear,
         liCurrentMonth, liCurrentDay, liCurrentHours, liCurrentMinutes, liCurrentSeconds;
@@ -126,7 +114,7 @@ Datum::t_date getDate(double dSeconds) {
  * int getMinutes() const;
  * int getSeconds() const;
  */
-Datum::t_date initTimeServer(Datum::t_date lastDate) {
+Datum::t_date Datum::initTimeServer(t_date lastDate) {
     Serial.println("initTimeServer");
     timeClient.begin();
     delay(100);
@@ -141,7 +129,7 @@ Datum::t_date initTimeServer(Datum::t_date lastDate) {
  * updateTimeServer
  * --------------
  */
-Datum::t_date updateTimeServer(Datum::t_date lastDate) {
+Datum::t_date Datum::updateTimeServer(t_date lastDate) {
     timeClient.update();
     Datum::t_date d = getDate(timeClient.getEpochTime());
     if (d.day != lastDate.day) {
